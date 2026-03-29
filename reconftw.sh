@@ -12,6 +12,13 @@
 #	   ░        ░  ░░ ░          ░ ░           ░                      ░
 #
 
+# Load UI library
+# shellcheck source=lib/ui.sh
+if [[ -f "${SCRIPTPATH}/lib/ui.sh" ]]; then
+    source "${SCRIPTPATH}/lib/ui.sh"
+    ui_init
+fi
+
 # Error Management
 #set -eEuo pipefail
 #function handle_error() {
@@ -2844,8 +2851,12 @@ function sendToNotify {
 }
 
 function start_func() {
-	printf "${bgreen}#######################################################################"
-	notification "${2}" info
+	if declare -F ui_batch_start >/dev/null 2>&1; then
+		ui_batch_start "${2}" 1
+	else
+		printf "${bgreen}#######################################################################"
+		notification "${2}" info
+	fi
 	echo "[$current_date] Start function: ${1} " >>"${LOGFILE}"
 	start=$(date +%s)
 }
@@ -2854,14 +2865,22 @@ function end_func() {
 	touch $called_fn_dir/.${2}
 	end=$(date +%s)
 	getElapsedTime $start $end
-	notification "${2} Finished in ${runtime}" info
+	if declare -F ui_batch_end >/dev/null 2>&1; then
+		ui_batch_end 1 0 0 $((end - start)) 0 0 1 1
+	else
+		notification "${2} Finished in ${runtime}" info
+		printf "${bblue}[$current_date] ${1} ${reset}\n"
+		printf "${bgreen}#######################################################################${reset}\n"
+	fi
 	echo "[$current_date] End function: ${2} " >>"${LOGFILE}"
-	printf "${bblue}[$current_date] ${1} ${reset}\n"
-	printf "${bgreen}#######################################################################${reset}\n"
 }
 
 function start_subfunc() {
-	notification "     ${2}" info
+	if declare -F ui_live_progress_update >/dev/null 2>&1; then
+		ui_live_progress_update "${2}"
+	else
+		notification "     ${2}" info
+	fi
 	echo "[$current_date] Start subfunction: ${1} " >>"${LOGFILE}"
 	start_sub=$(date +%s)
 }
@@ -2870,6 +2889,9 @@ function end_subfunc() {
 	touch $called_fn_dir/.${2}
 	end_sub=$(date +%s)
 	getElapsedTime $start_sub $end_sub
+	if declare -F ui_live_progress_end >/dev/null 2>&1; then
+		ui_live_progress_end
+	fi
 	notification "     ${1} in ${runtime}" good
 	echo "[$current_date] End subfunction: ${1} " >>"${LOGFILE}"
 }
