@@ -2095,7 +2095,8 @@ function jschecks() {
 
 			printf "${yellow}[$(date +'%Y-%m-%d %H:%M:%S')] Running : Gathering endpoints 4/6${reset}\n"
 			[ -s "js/js_livelinks.txt" ] && xnLinkFinder -i js/js_livelinks.txt -sf subdomains/subdomains.txt -d $XNLINKFINDER_DEPTH -o .tmp/js_endpoints.txt 2>>"$LOGFILE" >/dev/null
-			find .tmp/sourcemapper/ \( -name "*.js" -o -name "*.ts" \) -type f | jsluice urls | jq -r .url | anew -q .tmp/js_endpoints.txt
+			[ -s "js/js_livelinks.txt" ] && interlace -tL js/js_livelinks.txt -threads ${INTERLACE_THREADS} -c "curl -sK -L '_target_' | jsluice urls" | jq -r .url 2>>"$LOGFILE" | anew -q .tmp/js_endpoints.txt
+			find .tmp/sourcemapper/ \( -name "*.js" -o -name "*.ts" \) -type f | jsluice urls | jq -r .url 2>>"$LOGFILE" | anew -q .tmp/js_endpoints.txt
 			[ -s "parameters.txt" ] && rm -f parameters.txt 2>>"$LOGFILE" >/dev/null
 			if [[ -s ".tmp/js_endpoints.txt" ]]; then
 				sed -i '/^\//!d' .tmp/js_endpoints.txt
@@ -2104,8 +2105,10 @@ function jschecks() {
 
 			printf "${yellow}[$(date +'%Y-%m-%d %H:%M:%S')] Running : Gathering secrets 5/6${reset}\n"
 			[ -s "js/js_livelinks.txt" ] && axiom-scan js/js_livelinks.txt -m mantra -ua \"${HEADER}\" -s -o js/js_secrets.txt $AXIOM_EXTRA_ARGS &>/dev/null
-			[ -s "js/js_secrets.txt" ] && trufflehog filesystem js/js_secrets.txt -j 2>/dev/null | jq -c | anew -q js/js_secrets_trufflehog.txt
-			[ -s "js/js_secrets.txt" ] && trufflehog filesystem .tmp/sourcemapper/ -j 2>/dev/null | jq -c | anew -q js/js_secrets_trufflehog.txt
+			[ -s "js/js_livelinks.txt" ] && interlace -tL js/js_livelinks.txt -threads ${INTERLACE_THREADS} -c "curl -sK -L '_target_' | jsluice secrets" | jq -c 2>>"$LOGFILE" | anew -q js/js_secrets_jsluice.json
+			[ -s "js/js_livelinks.txt" ] && trufflehog http --targets js/js_livelinks.txt --json 2>>"$LOGFILE" | jq -c | anew -q js/js_secrets_trufflehog.json
+			[ -s "js/js_secrets.txt" ] && trufflehog filesystem js/js_secrets.txt --json 2>/dev/null | jq -c | anew -q js/js_secrets_trufflehog.json
+			[ -d ".tmp/sourcemapper/" ] && [ "$(ls -A .tmp/sourcemapper/)" ] && trufflehog filesystem .tmp/sourcemapper/ --json 2>/dev/null | jq -c | anew -q js/js_secrets_trufflehog.json
 			[ -s "js/js_secrets.txt" ] && sed -r "s/\x1B\[([0-9]{1,3}(;[0-9]{1,2};?)?)?[mGK]//g" -i js/js_secrets.txt
 
 			printf "${yellow}[$(date +'%Y-%m-%d %H:%M:%S')] Running : Building wordlist 6/6${reset}\n"
@@ -3086,6 +3089,8 @@ function end() {
 		rm -rf $dir/.log
 	fi
 
+	generate_summary
+
 	if [[ -n $dir_output ]]; then
 		output
 		finaldir=$dir_output
@@ -3105,6 +3110,55 @@ function end() {
 	#Separator for more clear messges in telegram_Bot
 	notification echo "[$(date +'%Y-%m-%d %H:%M:%S')] ******  Stay safe 🦠 and secure 🔐  ******" info
 
+}
+
+function generate_summary() {
+	printf "${bgreen}#######################################################################${reset}\n"
+	printf "${bblue}[$(date +'%Y-%m-%d %H:%M:%S')] Generating scan summary ${reset}\n"
+
+	SUMMARY_FILE="${dir}/scan_summary.md"
+	echo "# Scan Summary for ${domain}" > "${SUMMARY_FILE}"
+	echo "Generated on: $(date)" >> "${SUMMARY_FILE}"
+	echo "" >> "${SUMMARY_FILE}"
+
+	echo "## 🏷️ Subdomains" >> "${SUMMARY_FILE}"
+	[ -s "subdomains/subdomains.txt" ] && echo "- Total subdomains found: $(cat subdomains/subdomains.txt | wc -l)" >> "${SUMMARY_FILE}" || echo "- No subdomains found" >> "${SUMMARY_FILE}"
+	echo "" >> "${SUMMARY_FILE}"
+
+	echo "## 🌐 Web Servers" >> "${SUMMARY_FILE}"
+	[ -s "webs/webs_all.txt" ] && echo "- Total web servers identified: $(cat webs/webs_all.txt | wc -l)" >> "${SUMMARY_FILE}" || echo "- No web servers identified" >> "${SUMMARY_FILE}"
+	echo "" >> "${SUMMARY_FILE}"
+
+	echo "## 🔍 Nuclei Findings" >> "${SUMMARY_FILE}"
+	if ls nuclei_output/*.txt 1> /dev/null 2>&1; then
+		for sev in critical high medium low info; do
+			[ -s "nuclei_output/${sev}.txt" ] && echo "- **${sev^^}**: $(cat nuclei_output/${sev}.txt | wc -l)" >> "${SUMMARY_FILE}"
+		done
+	else
+		echo "- No Nuclei findings" >> "${SUMMARY_FILE}"
+	fi
+	echo "" >> "${SUMMARY_FILE}"
+
+	echo "## 🔑 Secrets & Leaks" >> "${SUMMARY_FILE}"
+	[ -s "js/js_secrets_trufflehog.json" ] && echo "- Trufflehog secrets found: $(cat js/js_secrets_trufflehog.json | wc -l)" >> "${SUMMARY_FILE}"
+	[ -s "js/js_secrets_jsluice.json" ] && echo "- jsluice secrets found: $(cat js/js_secrets_jsluice.json | wc -l)" >> "${SUMMARY_FILE}"
+	[ -s "osint/postman_leaks.txt" ] && echo "- Postman leaks found" >> "${SUMMARY_FILE}"
+	echo "" >> "${SUMMARY_FILE}"
+
+	echo "## 🧬 GraphQL & APIs" >> "${SUMMARY_FILE}"
+	[ -s "vulns/graphql.txt" ] && echo "- GraphQL endpoints found: $(cat vulns/graphql.txt | wc -l)" >> "${SUMMARY_FILE}"
+	[ -s "osint/swagger_leaks.txt" ] && echo "- Swagger/OpenAPI leaks found" >> "${SUMMARY_FILE}"
+	echo "" >> "${SUMMARY_FILE}"
+
+	echo "## 🔍 Parameter Discovery" >> "${SUMMARY_FILE}"
+	[ -s "vulns/arjun.txt" ] && echo "- Hidden parameters found: $(cat vulns/arjun.txt | wc -l)" >> "${SUMMARY_FILE}"
+	echo "" >> "${SUMMARY_FILE}"
+
+	# Generate Elite HTML Dashboard
+	python3 "${SCRIPTPATH}/generate_dashboard.py" "${domain}" "${dir}" "${SCRIPTPATH}/dashboard_template.html" 2>>"$LOGFILE" >/dev/null
+
+	printf "${bblue}[$(date +'%Y-%m-%d %H:%M:%S')] Summary generated at ${SUMMARY_FILE} and ${dir}/dashboard.html ${reset}\n"
+	printf "${bgreen}#######################################################################${reset}\n"
 }
 
 ###############################################################################################################
